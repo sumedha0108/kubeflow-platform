@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import apps
+from app.routers import apps, logs
 
 app = FastAPI(
     title="KubeFlow Platform API",
@@ -10,13 +10,14 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # in production, lock this to your dashboard domain
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 app.include_router(apps.router, prefix="/apps", tags=["apps"])
+app.include_router(logs.router, prefix="/logs", tags=["logs"])
 
 @app.get("/health")
 def health():
