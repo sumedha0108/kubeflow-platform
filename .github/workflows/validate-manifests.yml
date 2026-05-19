@@ -1,0 +1,33 @@
+name: Validate Kubernetes Manifests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'platform/**'
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install kubeval
+        run: |
+          wget https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz
+          tar xf kubeval-linux-amd64.tar.gz
+          sudo mv kubeval /usr/local/bin
+
+      - name: Validate manifests
+        run: |
+          find apps/ -name "*.yaml" | xargs kubeval --ignore-missing-schemas
+          find platform/ -name "*.yaml" | xargs kubeval --ignore-missing-schemas
+
+      - name: Check ArgoCD applications point to correct repo
+        run: |
+          grep -r "repoURL" platform/argocd/ | grep -v "sumedha0108/kubeflow-platform" && echo "Wrong repo URL found!" && exit 1 || echo "Repo URLs look correct"
