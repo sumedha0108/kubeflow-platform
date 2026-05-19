@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getApp, scaleApp, deleteApp } from '../api/client';
+import { getApp, scaleApp, deleteApp, diagnosePod } from '../api/client';
 import StatusBadge from '../components/StatusBadge';
 import LogViewer from '../components/LogViewer';
 
@@ -24,7 +24,14 @@ const styles = {
   selectedPod: { background: '#f5f3ff', borderRadius: '8px', padding: '10px', marginBottom: '4px' },
   logsCard: { background: '#fff', borderRadius: '12px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)', marginBottom: '16px' },
   hint: { fontSize: '12px', color: '#9ca3af', marginBottom: '12px' },
+  diagnoseBtn: { background: '#fff3cd', border: '1px solid #ffc107', color: '#856404', padding: '4px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', marginLeft: '8px' },
+  diagnosisCard: { background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: '12px', padding: '24px', marginBottom: '16px' },
+  diagnosisTitle: { fontSize: '14px', fontWeight: '600', color: '#92400e', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' },
+  diagnosisText: { fontSize: '14px', lineHeight: '1.7', color: '#451a03', whiteSpace: 'pre-wrap' },
+  diagnosisLoading: { fontSize: '14px', color: '#92400e', display: 'flex', alignItems: 'center', gap: '8px' },
 };
+
+const UNHEALTHY_PHASES = ['Failed', 'CrashLoopBackOff', 'Error', 'OOMKilled', 'Pending'];
 
 export default function AppDetail() {
   const { name } = useParams();
@@ -33,28 +40,29 @@ export default function AppDetail() {
   const [replicas, setReplicas] = useState(1);
   const [loading, setLoading] = useState(true);
   const [selectedPod, setSelectedPod] = useState(null);
+  const [diagnosis, setDiagnosis] = useState(null);
+  const [diagnosing, setDiagnosing] = useState(false);
 
-  const fetchApp = async () => {
+  // useCallback memoizes fetchApp so it has a stable reference
+  // This lets us safely include it in useEffect's dependency array
+  const fetchApp = useCallback(async () => {
     try {
       const res = await getApp(name);
       setApp(res.data);
       setReplicas(res.data.desired_replicas);
-      // auto-select first pod if none selected
-      if (!selectedPod && res.data.pods?.length > 0) {
-        setSelectedPod(res.data.pods[0]);
-      }
+      setSelectedPod(prev => prev || res.data.pods?.[0] || null);
     } catch {
       navigate('/');
     } finally {
       setLoading(false);
     }
-  };
+  }, [name, navigate]);
 
   useEffect(() => {
     fetchApp();
     const interval = setInterval(fetchApp, 5000);
     return () => clearInterval(interval);
-  }, [name]);
+  }, [fetchApp]);
 
   const handleScale = async () => {
     await scaleApp(name, replicas);
@@ -66,6 +74,21 @@ export default function AppDetail() {
     await deleteApp(name);
     navigate('/');
   };
+
+  const handleDiagnose = async (pod) => {
+    setDiagnosing(true);
+    setDiagnosis(null);
+    try {
+      const res = await diagnosePod(name, pod.name);
+      setDiagnosis(res.data);
+    } catch {
+      setDiagnosis({ diagnosis: 'Could not get diagnosis. Check that the Claude API key is configured.', error: true });
+    } finally {
+      setDiagnosing(false);
+    }
+  };
+
+  const isPodUnhealthy = (pod) => UNHEALTHY_PHASES.some(p => pod.phase?.includes(p));
 
   if (loading || !app) return <div style={styles.page}>Loading...</div>;
 
@@ -99,7 +122,7 @@ export default function AppDetail() {
 
       <div style={styles.card}>
         <p style={styles.cardTitle}>Pods ({app.pods?.length || 0})</p>
-        <p style={styles.hint}>Click a pod to view its logs</p>
+        <p style={styles.hint}>Click a pod to view logs. Click "AI Diagnose" on a failing pod.</p>
         {app.pods?.map(pod => (
           <div
             key={pod.name}
@@ -113,18 +136,43 @@ export default function AppDetail() {
               <p style={styles.podName}>{pod.name}</p>
               <p style={styles.podMeta}>Node: {pod.node}</p>
             </div>
-            <StatusBadge status={pod.phase} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <StatusBadge status={pod.phase} />
+              {isPodUnhealthy(pod) && (
+                <button
+                  style={styles.diagnoseBtn}
+                  onClick={(e) => { e.stopPropagation(); handleDiagnose(pod); }}
+                >
+                  🤖 AI Diagnose
+                </button>
+              )}
+            </div>
           </div>
         ))}
       </div>
 
+      {diagnosing && (
+        <div style={styles.diagnosisCard}>
+          <p style={styles.diagnosisLoading}>🤖 Analyzing crash logs with Claude...</p>
+        </div>
+      )}
+
+      {diagnosis && !diagnosing && (
+        <div style={styles.diagnosisCard}>
+          <p style={styles.diagnosisTitle}>
+            🤖 AI Diagnosis
+            <span style={{ fontSize: '12px', fontWeight: 400, color: '#92400e' }}>
+              ({diagnosis.logs_analyzed} log lines analyzed)
+            </span>
+          </p>
+          <p style={styles.diagnosisText}>{diagnosis.diagnosis}</p>
+        </div>
+      )}
+
       {selectedPod && (
         <div style={styles.logsCard}>
           <p style={styles.cardTitle}>Live Logs</p>
-          <LogViewer
-            namespace={name}
-            podName={selectedPod.name}
-          />
+          <LogViewer namespace={name} podName={selectedPod.name} />
         </div>
       )}
     </div>
